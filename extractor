@@ -1,0 +1,128 @@
+#!/usr/bin/env python
+__author__ = 'Sadhanandh'
+
+
+import urllib2
+import urllib
+import os
+import glob
+import json
+import re
+from urlparse import  parse_qsl #,urlparse
+from lxml.html import fromstring
+
+def downloader(thelist,fname="Temp",location="."):
+    location = os.path.join(location,fname)
+    print location
+    if os.path.exists(location):
+        gl = glob.glob(location+"*")
+        os.makedirs(location+str(len(gl)))
+        os.chdir(location+str(len(gl)))
+    elif os.path.exists(location):
+        os.makedirs(location)
+        os.chdir(location)
+    print "Total Pages: %s"%len(thelist)
+    for i,image in enumerate(thelist):
+        print "Downloading page %s ..."%(i+1)
+        urllib.urlretrieve(image,"Page-"+str(i+1)+".jpg")
+
+"""
+
+Reference sites:
+http://mashable.com/2008/08/07/issuu-platform/
+http://issuu.com/score/docs/v06i10?e=1110435/5043120&adpageId=5183c3db-f2461
+http://www.ladiesspecial.com/magazine-archives/1157-2013-october-main-issue                   : issuu embed
+http://tamilmagazines.blogspot.in/2013/10/read-kungumam-online-21-10-2013.html#axzz2izR63j3o  : issuu
+http://tamilmagazines.blogspot.in/2013/10/read-aanmegam-online-october2013.html#axzz2izR63j3o : picasna
+
+"""
+
+def extractor(url):
+    type = None
+    docid = None
+    #url = "http://www.ladiesspecial.com/magazine-archives/1157-2013-october-main-issue"
+    #url = "http://tamilmagazines.blogspot.in/2013/10/read-kungumam-online-21-10-2013.html#axzz2izR63j3o"
+    #url = "http://tamilmagazines.blogspot.in/2013/10/read-aanmegam-online-october2013.html"
+    #url = "http://tamilmagazines.blogspot.in/2013/10/read-kumudam-online-23-10-2013.html#axzz2izR63j3o"
+
+    data = urllib2.urlopen(url).read()
+    t = fromstring(data)
+    haveflash = t.xpath('//object/embed/@type')
+    if len(haveflash)==0:
+        haveflash = t.xpath('//object/@type')
+    if len(haveflash)!=0 and haveflash[0]=="application/x-shockwave-flash":
+        src = t.xpath('//object/embed/@src')
+        if len(src)==0:
+            src = t.xpath('//object/@data')
+        if len(src)!=0:
+            if src[0].find("picasna")!=-1:
+                type = "picasna"
+            elif src[0].find("issuu")!=-1:
+                type = "issuu"
+
+    #"""  Embed issuu"""
+    else:
+        haveembed = t.xpath("//script/@src")
+        embed=False
+        if len(haveembed)!=0:
+            for scr in haveembed:
+                if scr.find("issuu.com/embed.js")!=-1:
+                    embed=True
+                    id=t.xpath('//div[@class="issuuembed"]/@data-configid')
+                    if len(id)!=0 :
+                        jsonp = urllib2.urlopen("http://embed.issuu.com/"+id[0]+".jsonp").read()
+                        db = json.loads(jsonp[jsonp.find("(")+1:jsonp.rfind(")")])
+                        docid  = db.get("id",None)
+                        if docid!=None:
+                            type = "issuu"
+                            break
+        
+        if embed!=True:
+            zz=re.findall("documentId\s*?[\"\']?[:]?.*?[\"\'](.*?)[\"\']",data,re.I)
+            if(len(zz)!=0):
+                docid = zz[0]
+                type = "issuu"
+                embed = True
+
+        print docid
+        print embed
+
+    print type
+    if type==None:
+        print "Extractable Flash not found!\nExiting..."
+        exit("0")
+
+    query = t.xpath('//object/param[@name="FlashVars"]/@value')
+    if len(query) == 0:
+        query = t.xpath('//object/param[@name="flashvars"]/@value')
+    if len(query) == 0:
+        query = t.xpath('//object/embed/@flashvars')
+
+    if type=="picasna":
+        if len(query) != 0:
+            xmldata = urllib2.urlopen("http://picasna.com/widget/xml/?"+query[0]).read()
+            newtree = fromstring(xmldata)
+            images = newtree.xpath("//image/@large")
+            downloader(images)
+
+    elif type=="issuu":
+        if len(query) != 0:
+            dic =  dict(parse_qsl(query[0]))
+            docid =  dic.get('documentId',None)
+        if docid!=None:
+            url = "http://s3.amazonaws.com/document.issuu.com/"+docid+"/pages.jsonp"
+            jout = urllib2.urlopen(url).read().strip()
+            js = json.loads(jout[jout.find("(")+1:jout.rfind(")")])
+            pages = js["pagecount"]
+            images = ["http://image.issuu.com/"+docid+"/jpg/page_"+str(page)+".jpg" for page in xrange(1,int(pages)+1)]
+            downloader(images)
+
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("url", type=str,
+                    help="The url where the flash is located")
+    args = parser.parse_args()
+    extractor(args.url)
